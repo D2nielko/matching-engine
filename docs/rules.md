@@ -1,7 +1,8 @@
 # Matching rules
 
-These rules define what the book does. `include/me/reference_book.hpp` implements them, and
-`tests/reference_book_test.cpp` checks them. Any faster book must produce exactly the same events.
+These rules define what the book does. `include/me/reference_book.hpp` is the simple implementation,
+`include/me/engine.hpp` is the real one, and both must produce exactly the same events
+(`tests/differential_test.cpp` checks this on random command streams).
 
 ## Units
 
@@ -19,26 +20,45 @@ line.
 A trade happens at the resting (maker) order's price. A buy at 105 that meets a sell resting at 100
 trades at 100.
 
-## Order types
+## Commands
 
-Limit order: trades against the opposite side for as long as prices cross its limit, then rests in
-the book with whatever is left.
+### New order
 
-Market order: trades against the opposite side at any price until it is filled or the opposite side
-is empty. Whatever is left is cancelled and never rests. The price argument does not exist for
-market orders.
+| Type | Trades on arrival | Leftover |
+|---|---|---|
+| Limit | Against prices that cross its limit | Rests at its limit price |
+| Market | At any price | Cancelled |
+| IOC (immediate-or-cancel) | Against prices that cross its limit | Cancelled |
+| FOK (fill-or-kill) | Only if the full size can trade within its limit; otherwise nothing trades | Cancelled (the full size) |
+| Post-only | Never; rejected if it would trade | Rests at its limit price |
 
-Cancel: removes a resting order and reports how much quantity was removed.
+The price is ignored for market orders.
+
+### Cancel
+
+Removes a resting order and reports how much quantity was removed.
+
+### Modify
+
+Changes a resting order's price and open quantity. The quantity is the new open quantity, not a
+change relative to the old one.
+
+- Same price and the same or smaller quantity: the order keeps its place in line.
+- New price or bigger quantity: the order loses its place. It is taken out of the book and sent back
+  in as a limit order with the same id, so it can trade immediately if the new price crosses.
+- A post-only order stays post-only. If its new price would trade, the modify is rejected and the
+  order is left unchanged.
 
 ## Events
 
-Every request returns a list of events, in this order:
+Every command returns a list of events, in this order:
 
-1. `Rejected` alone, if the request is invalid (see below). Nothing else happens.
-2. `Ack` for an accepted new order.
+1. `Rejected` alone, if the command is invalid (see below). Nothing else happens.
+2. `Ack` for an accepted new order, or `Modified` for an accepted modify (with the new price and
+   quantity).
 3. One `Trade` per fill, in the order the fills happened.
-4. `Cancelled` for quantity that will never trade: the result of a cancel, or the unfilled rest of
-   a market order.
+4. `Cancelled` for quantity that will never trade: the result of a cancel, or the leftover of a
+   market, IOC, or FOK order.
 
 ## Rejects
 
@@ -46,16 +66,18 @@ A new order is checked in this order, and the first failing check decides the re
 
 1. `DuplicateId`: an order with this id is resting in the book.
 2. `ZeroQty`: quantity is 0.
-3. `NonPositivePrice`: limit price is 0 or negative (limit orders only).
+3. `NonPositivePrice`: price is 0 or negative (all types except market).
+4. `WouldTrade`: a post-only order would trade on arrival.
 
-A cancel is rejected with `UnknownId` if no resting order has that id. That includes orders that
-were fully filled or already cancelled.
+A modify is checked in this order: `UnknownId`, `ZeroQty`, `NonPositivePrice`, then `WouldTrade`
+for a post-only order. A rejected modify leaves the order unchanged.
+
+A cancel or modify is rejected with `UnknownId` if no resting order has that id. That includes
+orders that were fully filled or already cancelled.
 
 Ids only have to be unique among resting orders. Once an order is filled or cancelled, its id can
 be used again.
 
-## Not handled yet
+## Not handled
 
-- Self-trade prevention. Orders have no owner yet, so one participant's buy can trade with their own sell.
-- Modify (cancel/replace), IOC, FOK, post-only.
-- Sequence numbers and timestamps on events.
+- Self-trade prevention. Orders have no owner, so one participant's buy can trade with their own sell.

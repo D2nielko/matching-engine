@@ -8,7 +8,7 @@
 
 namespace me {
 
-enum class RejectReason : std::uint8_t { DuplicateId, ZeroQty, NonPositivePrice, UnknownId };
+enum class RejectReason : std::uint8_t { DuplicateId, ZeroQty, NonPositivePrice, UnknownId, WouldTrade };
 
 struct Ack {
     OrderId id;
@@ -25,11 +25,19 @@ struct Trade {
     bool operator==(const Trade&) const = default;
 };
 
-// Quantity that will never trade: removed by a cancel, or the unfilled rest of a market order.
+// Quantity that will never trade: removed by a cancel, or the unfilled rest of a market, IOC, or FOK order.
 struct Cancelled {
     OrderId id;
     Qty     qty;
     bool operator==(const Cancelled&) const = default;
+};
+
+// A modify was accepted. price and qty are the order's new values before any matching.
+struct Modified {
+    OrderId id;
+    Price   price;
+    Qty     qty;
+    bool operator==(const Modified&) const = default;
 };
 
 struct Rejected {
@@ -38,7 +46,7 @@ struct Rejected {
     bool operator==(const Rejected&) const = default;
 };
 
-using Event  = std::variant<Ack, Trade, Cancelled, Rejected>;
+using Event  = std::variant<Ack, Trade, Cancelled, Modified, Rejected>;
 using Events = std::vector<Event>;
 
 }  // namespace me
